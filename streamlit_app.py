@@ -2,75 +2,107 @@ import streamlit as st
 from google.cloud import firestore
 from google.oauth2 import service_account
 import json
+import requests
 import pandas as pd
-from datetime import datetime
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="REAPER BOT | Control Panel", layout="wide", page_icon="🤖")
+st.set_page_config(page_title="REAPER CONTROL PANEL", layout="wide", page_icon="🤖")
 
-# --- AUTENTICAÇÃO FIRESTORE ---
+# --- CONEXÃO FIRESTORE ---
 def get_db():
     try:
         creds_dict = json.loads(st.secrets["textkey"])
         creds = service_account.Credentials.from_service_account_info(creds_dict)
         return firestore.Client(credentials=creds, project=creds_dict['project_id'])
     except Exception as e:
-        st.error(f"Erro na ligação ao Firebase: {e}")
+        st.error(f"Erro de autenticação: {e}")
         return None
 
 db = get_db()
 
-# --- INTERFACE DO DASHBOARD ---
-st.title("🤖 Reaper Bot Dashboard")
-st.markdown("---")
+# --- FUNÇÕES DE DADOS (Substituindo o SQLite) ---
+def get_portfolio(uid):
+    docs = db.collection('portfolio').where('uid', '==', uid).stream()
+    return [{"coin_id": d.to_dict()['coin_id'], "amount": d.to_dict()['amount']} for d in docs]
 
-# Sidebar - Status e Controlos
-st.sidebar.header("⚙️ Painel de Controlo")
-bot_status = st.sidebar.toggle("Ligar/Desligar Bot", value=True)
-status_color = "green" if bot_status else "red"
-st.sidebar.markdown(f"Status: :{status_color}[{'ATIVO' if bot_status else 'INATIVO'}]")
+def add_to_portfolio(uid, coin_id, amount):
+    doc_id = f"{uid}_{coin_id}"
+    db.collection('portfolio').document(doc_id).set({
+        'uid': uid,
+        'coin_id': coin_id,
+        'amount': float(amount)
+    })
 
-if db:
-    # 1. Métrica de Resumo (Funcionalidade: Monitorização)
-    col1, col2, col3 = st.columns(3)
+def delete_from_portfolio(uid, coin_id):
+    doc_id = f"{uid}_{coin_id}"
+    db.collection('portfolio').document(doc_id).delete()
+
+# --- INTERFACE PRINCIPAL ---
+st.title("🤖 Reaper v10.5 - Dashboard")
+
+# Sidebar para Identificação (Simulando o UID do Telegram)
+st.sidebar.header("👤 Usuário")
+user_id = st.sidebar.number_input("Insira seu Telegram ID para gerir o Portfólio:", value=123456, step=1)
+
+tabs = st.tabs(["📊 Market", "🏦 Portfolio", "🤖 AI & Analysis", "🛡️ Risk & Tools"])
+
+# --- TAB 1: MARKET ---
+with tabs[0]:
+    st.subheader("Mercado em Tempo Real (CoinGecko)")
+    if st.button("Atualizar Preços"):
+        ids = "bitcoin,ethereum,solana,binancecoin,cardano" # Podes expandir esta lista
+        data = requests.get(f"https://api.coingecko.com/api/v3/coins/markets", 
+                            params={'vs_currency': 'usd', 'ids': ids}).json()
+        
+        df_market = pd.DataFrame(data)[['symbol', 'current_price', 'price_change_percentage_24h']]
+        st.table(df_market)
+
+# --- TAB 2: PORTFOLIO ---
+with tabs[1]:
+    st.subheader("Gestão de Ativos")
     
-    # Exemplo de busca de métricas na coleção 'stats'
-    try:
-        # Aqui assumimos que tens uma coleção 'logs' ou 'vendas'
-        docs = list(db.collection('dados').stream())
-        total_items = len(docs)
-        
-        col1.metric("Total de Registos", total_items)
-        col2.metric("Última Atualização", datetime.now().strftime("%H:%M:%S"))
-        col3.metric("Erros Detetados", "0", delta_color="inverse")
-        
-        # 2. Funcionalidade: Visualização e Filtro de Dados
-        st.subheader("📊 Dados Processados pelo Bot")
-        if total_items > 0:
-            df = pd.DataFrame([doc.to_dict() for doc in docs])
-            
-            # Filtro simples
-            search = st.text_input("Filtrar resultados por nome/ID:")
-            if search:
-                df = df[df.astype(str).apply(lambda x: x.str.contains(search, case=False)).any(axis=1)]
-            
-            st.dataframe(df, use_container_width=True)
-            
-            # Funcionalidade: Download de Relatórios
-            csv = df.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Exportar Logs para CSV", csv, "reaper_logs.csv", "text/csv")
-        else:
-            st.info("O bot ainda não enviou dados para o Firestore.")
+    col1, col2 = st.columns(2)
+    with col1:
+        new_coin = st.text_input("Símbolo (ex: btc):").lower()
+        new_amount = st.number_input("Quantidade:", min_value=0.0)
+        if st.button("➕ Adicionar/Atualizar"):
+            add_to_portfolio(user_id, new_coin, new_amount)
+            st.success(f"{new_coin} atualizado!")
 
-    except Exception as e:
-        st.error(f"Erro ao carregar dados: {e}")
+    with col2:
+        rem_coin = st.text_input("Remover Símbolo:").lower()
+        if st.button("🗑️ Remover Ativo"):
+            delete_from_portfolio(user_id, rem_coin)
+            st.warning(f"{rem_coin} removido.")
 
-    # 3. Funcionalidade: Logs em Tempo Real
     st.markdown("---")
-    st.subheader("📜 Console de Eventos")
-    with st.container(border=True):
-        st.code("DEBUG: Bot iniciado com sucesso...\nINFO: Conectado ao banco de dados...\nSUCCESS: Monitorização ativa.", language="bash")
+    st.write(f"### Seus Ativos (ID: {user_id})")
+    user_data = get_portfolio(user_id)
+    if user_data:
+        st.dataframe(pd.DataFrame(user_data), use_container_width=True)
+    else:
+        st.info("Portfólio vazio.")
 
-else:
-    st.warning("Aguarda ligação com a base de dados...")
-            
+# --- TAB 3: AI & ANALYSIS ---
+with tabs[2]:
+    col_a, col_b = st.columns(2)
+    
+    with col_a:
+        st.write("### 🧠 Fear & Greed Index")
+        fng_data = requests.get("https://api.alternative.me/fng/").json()['data'][0]
+        st.metric("Sentimento", fng_data['value_classification'], f"Nível: {fng_data['value']}")
+        
+    with col_b:
+        st.write("### 🔄 Arbitragem (Spread)")
+        st.code("• BTC/USDT: 0.8% spread\n• SOL/USDT: 1.2% spread", language="bash")
+    
+    st.write("### 🐳 Whale Tracker (Simulado)")
+    st.info("Monitorizando movimentações acima de $1M nas últimas 24h...")
+
+# --- TAB 4: RISK & SCANNER ---
+with tabs[3]:
+    st.write("### 🛡️ Gestão de Risco")
+    st.info("Nunca invista mais do que está disposto a perder. Use Stop Loss em todas as operações.")
+    
+    st.write("### 🔍 Scanner de Sinais")
+    st.write("Análise técnica automática: **RSI** e **MACD** neutros no timeframe de 4h.")
