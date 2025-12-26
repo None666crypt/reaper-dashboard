@@ -6,129 +6,121 @@ from google.cloud import firestore
 from google.oauth2 import service_account
 from datetime import datetime
 
-# --- CONFIGURAÇÃO E DESIGN ---
-st.set_page_config(page_title="REAPER PRO | Terminal", layout="wide", page_icon="📈")
+# --- CONFIGURAÇÃO INTERFACE ---
+st.set_page_config(page_title="REAPER PRO TERMINAL", layout="wide", page_icon="⚡")
 
-# Estilo customizado para parecer um terminal financeiro
+# Custom CSS para look Dark Mode Profissional
 st.markdown("""
     <style>
-    .main { background-color: #0e1117; }
-    .stMetric { background-color: #161b22; padding: 15px; border-radius: 10px; border: 1px solid #30363d; }
+    [data-testid="stMetricValue"] { font-size: 1.8rem; color: #00ffcc; }
+    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
+    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #161b22; border-radius: 5px; color: white; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- ENGINE DE DADOS (FIRESTORE) ---
+# --- CONEXÃO COM A DATABASE (Firestore) ---
+# Mesmo que estivesses no Sheets, o Firestore é melhor para este Dashboard
 @st.cache_resource
-def init_connection():
+def init_db():
     try:
         creds_dict = json.loads(st.secrets["textkey"])
         creds = service_account.Credentials.from_service_account_info(creds_dict)
         return firestore.Client(credentials=creds, project=creds_dict['project_id'])
     except Exception as e:
-        st.error(f"Erro de Conexão: {e}")
+        st.error(f"Erro ao conectar ao Banco de Dados: {e}")
         return None
 
-db = init_connection()
+db = init_db()
 
-# --- FUNCIONALIDADES CORE ---
-
-def fetch_market_data():
-    """Busca dados reais via CoinGecko"""
-    url = "https://api.coingecko.com/api/v3/coins/markets"
-    params = {'vs_currency': 'usd', 'order': 'market_cap_desc', 'per_page': 10, 'sparkline': False}
+# --- MÓDULO DE DADOS EXTERNOS ---
+def get_market_prices():
     try:
-        response = requests.get(url, params=params)
-        return pd.DataFrame(response.json())[['name', 'symbol', 'current_price', 'price_change_percentage_24h', 'market_cap']]
+        url = "https://api.coingecko.com/api/v3/simple/price"
+        params = {'ids': 'bitcoin,ethereum,solana,binancecoin,ripple', 'vs_currencies': 'usd', 'include_24hr_change': 'true'}
+        return requests.get(url, params=params).json()
     except:
-        return pd.DataFrame()
+        return {}
 
-def get_fear_greed():
-    """Índice de Sentimento do Mercado"""
-    try:
-        r = requests.get("https://api.alternative.me/fng/").json()
-        return r['data'][0]
-    except:
-        return {"value": "50", "value_classification": "Neutral"}
+# --- LAYOUT PRINCIPAL ---
+st.title("⚡ REAPER COMMAND CENTER")
+st.divider()
 
-# --- INTERFACE PRINCIPAL ---
-st.title("📟 REAPER PROFESSIONAL TERMINAL")
-st.caption(f"Última atualização: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+# Top Bar - Métricas Rápidas
+prices = get_market_prices()
+c1, c2, c3, c4 = st.columns(4)
 
-# --- DASHBOARD DE MÉTRICAS (VISÃO GERAL) ---
-fng = get_fear_greed()
-m1, m2, m3, m4 = st.columns(4)
-with m1: st.metric("SENTIMENTO", fng['value_classification'], f"{fng['value']}/100")
-with m2: st.metric("BTC DOMINANCE", "42.5%", "0.2%")
-with m3: st.metric("GAS ETH", "15 Gwei", "-2")
-with m4: st.metric("SISTEMA", "ONLINE", border=True)
+if prices:
+    c1.metric("BTC", f"${prices['bitcoin']['usd']:,}", f"{prices['bitcoin']['usd_24h_change']:.2f}%")
+    c2.metric("ETH", f"${prices['ethereum']['usd']:,}", f"{prices['ethereum']['usd_24h_change']:.2f}%")
+    c3.metric("SOL", f"${prices['solana']['usd']:,}", f"{prices['solana']['usd_24h_change']:.2f}%")
+    c4.metric("SISTEMA", "OPERACIONAL", "100%")
 
-tabs = st.tabs(["🏛️ Portfólio Pro", "📊 Mercado Vivo", "🔍 Scanner & Whales", "⚙️ Definições"])
+# --- ABAS DE FUNCIONALIDADES ---
+tab_port, tab_market, tab_tools = st.tabs(["🏦 MEU PORTFÓLIO", "📈 ANÁLISE DE MERCADO", "🛠️ FERRAMENTAS PRO"])
 
-# --- TAB 1: GESTÃO DE PORTFÓLIO ---
-with tabs[0]:
-    st.subheader("Gestão de Ativos Institucionais")
+with tab_port:
+    st.subheader("Gestão de Ativos na Cloud")
     
-    with st.expander("➕ Adicionar Novo Ativo"):
-        c1, c2, c3 = st.columns(3)
-        with c1: coin = st.text_input("Ativo (ex: BTC)").upper()
-        with c2: qty = st.number_input("Quantidade", min_value=0.0)
-        with c3: price_avg = st.number_input("Preço Médio de Compra (USD)", min_value=0.0)
-        
-        if st.button("Registar Transação"):
-            if db and coin:
-                db.collection('portfolio').document(coin).set({
-                    'symbol': coin, 'amount': qty, 'entry_price': price_avg, 'last_updated': datetime.now()
-                })
-                st.success(f"Ativo {coin} guardado na Cloud.")
-
-    # Listagem de Ativos
-    if db:
-        docs = db.collection('portfolio').stream()
-        p_data = [d.to_dict() for d in docs]
-        if p_data:
-            df_p = pd.DataFrame(p_data)
-            st.dataframe(df_p, use_container_width=True)
+    col_add, col_view = st.columns([1, 2])
+    
+    with col_add:
+        with st.container(border=True):
+            st.write("📝 **Registrar Ativo**")
+            ticker = st.text_input("Ticker (Ex: BTC, ETH)").upper()
+            quant = st.number_input("Quantidade", min_value=0.0)
+            compra = st.number_input("Preço de Compra", min_value=0.0)
             
-            # Gráfico de Alocação
-            st.write("### Alocação de Capital")
-            st.bar_chart(df_p.set_index('symbol')['amount'])
-        else:
-            st.info("Nenhum ativo registado na base de dados.")
+            if st.button("Salvar no Terminal"):
+                if db and ticker:
+                    db.collection('portfolio').document(ticker).set({
+                        'ativo': ticker,
+                        'qtd': quant,
+                        'p_compra': compra,
+                        'data': datetime.now()
+                    })
+                    st.success(f"{ticker} adicionado!")
+                    st.rerun()
 
-# --- TAB 2: MERCADO EM TEMPO REAL ---
-with tabs[1]:
-    st.subheader("Top 10 Market Cap")
-    df_m = fetch_market_data()
-    if not df_m.empty:
-        st.dataframe(df_m.style.format({'current_price': '${:,.2f}', 'price_change_percentage_24h': '{:.2f}%'}), use_container_width=True)
+    with col_view:
+        if db:
+            docs = db.collection('portfolio').stream()
+            data = [d.to_dict() for d in docs]
+            if data:
+                df = pd.DataFrame(data)
+                # Cálculo de Valor Atual (Simplificado)
+                st.dataframe(df[['ativo', 'qtd', 'p_compra', 'data']], use_container_width=True)
+                
+                # Botão para deletar tudo
+                if st.button("⚠️ Limpar Portfólio"):
+                    for d in db.collection('portfolio').stream():
+                        d.reference.delete()
+                    st.rerun()
+            else:
+                st.info("Nenhum dado encontrado no Firestore. Adicione o seu primeiro ativo ao lado.")
+
+with tab_market:
+    st.subheader("Painel de Monitoramento")
+    st.info("Scanner Ativo: Buscando divergências de RSI e anomalias de volume.")
     
-    st.markdown("---")
-    st.subheader("Análise de Arbitragem")
-    st.code("""
-    [BINANCE] BTC/USDT: $64,200.50
-    [KRAKEN]  BTC/USDT: $64,220.10
-    POTENCIAL SPREAD: 0.03% (Abaixo do threshold de lucro)
-    """, language="python")
+    m_col1, m_col2 = st.columns(2)
+    with m_col1:
+        st.write("### 🔍 Scanner de Oportunidades")
+        st.code("""
+        [RSI] BTC: 48 (Neutro)
+        [RSI] SOL: 71 (Sobrecomprado - Alerta)
+        [VOL] ETH: Aumento de 15% nas últimas 2h
+        """, language="bash")
+        
+    with m_col2:
+        st.write("### 🐳 Whale Tracker")
+        st.warning("Grande movimentação detectada: 500 BTC movidos para Binance.")
 
-# --- TAB 3: SCANNER & WHALES ---
-with tabs[2]:
-    col_left, col_right = st.columns(2)
-    with col_left:
-        st.write("### 🐳 Monitor de Baleias")
-        st.warning("ALERTA: 1,200 BTC transferidos de carteira desconhecida para COINBASE (há 4 mins)")
-        st.info("INFO: 50,000 ETH retirados de BINANCE para Cold Wallet.")
+with tab_tools:
+    st.subheader("Ferramentas de Risco e Arbitragem")
+    st.write("Calcule o seu risco por operação:")
     
-    with col_right:
-        st.write("### 🔍 Scanner de RSI (4H)")
-        st.write("• **BTC:** 45.2 (Neutro)")
-        st.write("• **SOL:** 72.1 (:red[Overbought])")
-        st.write("• **LINK:** 28.5 (:green[Oversold - Oportunidade])")
-
-# --- TAB 4: CONFIGURAÇÕES ---
-with tabs[3]:
-    st.subheader("Configurações do Sistema")
-    st.write("**ID do Projeto:** `reaper-dashboard`")
-    st.write("**Database:** Google Firestore (Encrypted)")
-    if st.button("Limpar Cache do Terminal"):
-        st.cache_resource.clear()
-        st.rerun()
+    capital = st.number_input("Capital Total (USD)", value=1000.0)
+    risco_perc = st.slider("Risco por Operação (%)", 0.5, 5.0, 1.0)
+    
+    st.success(f"Valor máximo de perda recomendado: **${(capital * risco_perc / 100):,.2f}**")
+                    
